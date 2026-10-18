@@ -1,2 +1,3 @@
 0001-RISC-OS-no-execinfo.h-backtrace.patch
 0002-RISC-OS-platform-support.patch
+0003-RISC-OS-present-only-what-changed.patch

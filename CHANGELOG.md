@@ -1,5 +1,31 @@
 # Changes in the RISC OS port
 
+## 1.8.0-riscos2test (2026-10-18)
+Much faster drawing.
+
+- First Pi 4 test of riscos1test (owner): everything works (menus, a
+  career, saving and loading, full screen and window), but only 13 frames
+  a second at 1920 x 1200 with the display scale at 150% (78 ms a frame),
+  20 at 1200 x 900. Measured on Linux: drawing the city takes 0.7 ms, SDL
+  presenting it 18 ms. SDL's software renderer converted and scaled the
+  whole frame every frame, and a scale that isn't a whole number with the
+  RISC OS screen's XBGR order takes SDL's slowest path.
+- `patches/julius/0003`: on RISC OS Julius no longer uses an SDL
+  renderer. `src/platform/riscos/riscos_present.c` keeps the last frame,
+  finds the 64 x 16 pixel cells that changed and only scales, converts and
+  plots those. A full 1920 x 1200 frame takes 1.2 ms on the Linux test
+  machine (SDL: 18 ms); a still city under 1 ms. The game's pointer is
+  blended in for presenting only. Mouse positions are mapped to the
+  game's coordinates (SDL's renderer did that before).
+- Scaling is now nearest neighbour: 100% and 200% look exactly like the
+  original; at 150% some pixel rows and columns are doubled (before, SDL
+  smoothed them).
+- With the log on, a "Present:" line every 10 seconds (frames, full
+  frames, cells changed, pixels drawn, ms a frame) next to "Frames:".
+- Checked on Linux: at 100% the picture is identical to SDL's (0 pixels
+  differ); the XBGR order gives exactly the reference with red and blue
+  swapped; crossdev checks pass.
+
 ## 1.8.0-riscos1test (2026-10-18)
 First test build: Julius 1.8.0 for RISC OS 5.
 

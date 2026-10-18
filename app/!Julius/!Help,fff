@@ -40,6 +40,11 @@ covers the screen, so other programs keep running). F6 or Alt-Enter
 switch between a window and full screen.
 The arrow keys scroll the map.
 
+The display scale is set in Julius's configuration window (Options on
+the main menu). 100% and 200% show the original pixels exactly; other scales
+double some rows and columns of pixels. A larger scale makes everything
+bigger and shows less of the city.
+
 Settings and saved games are kept in the data folder (C3data).
 
 In !Run you can:

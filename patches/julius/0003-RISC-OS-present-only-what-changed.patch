@@ -1,0 +1,681 @@
+From ba2d57a0768c547844f0cdca3f834143b450c8d6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 18 Oct 2026 12:44:50 +0100
+Subject: [PATCH 3/3] RISC OS: present only what changed
+
+SDL's software renderer converted and scaled the whole frame every frame.
+With a display scale that isn't a whole number (150%), linear filtering
+and the RISC OS screen's XBGR order it takes SDL's slowest path: on a Pi 4
+at 1920 x 1200 the game ran at 13 frames a second, 78 ms a frame, nearly
+all of it presenting (on Linux the city takes 0.7 ms to draw and SDL 18 ms
+to present).
+
+On RISC OS (or with -DRISCOS_PRESENT_TEST=ON for testing elsewhere) there
+is no SDL renderer: src/platform/riscos/riscos_present.c keeps a copy of
+the last frame, finds the 64 x 16 pixel cells that changed, and only
+scales (nearest neighbour), converts (red and blue swapped for XBGR) and
+updates those, as runs joined into rectangles. Other surface formats go
+through SDL_BlitScaled. Mouse positions are mapped from the window to the
+canvas, which SDL's renderer used to do. The game's pointer is blended
+into the canvas just for presenting and taken out again.
+
+A "Present:" log line every 10 seconds gives frames, full frames, cells
+changed, pixels drawn and time per frame.
+
+Host checks: at 100% the picture is identical to SDL's renderer's (0
+pixels differ); forced XBGR order gives exactly the reference with red
+and blue swapped; a full 1920 x 1200 frame at 150% takes 1.2 ms to
+convert and scale (SDL: 18 ms); a still city 0.3-0.7 ms.
+---
+ CMakeLists.txt                       |   7 +
+ src/platform/julius.c                |  13 +-
+ src/platform/riscos/riscos_present.c | 344 +++++++++++++++++++++++++++
+ src/platform/riscos/riscos_present.h |  37 +++
+ src/platform/screen.c                | 136 +++++++++++
+ 5 files changed, 535 insertions(+), 2 deletions(-)
+ create mode 100644 src/platform/riscos/riscos_present.c
+ create mode 100644 src/platform/riscos/riscos_present.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index cfc318ab..f6f20952 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -228,6 +228,13 @@ elseif (RISCOS)
+     set(PLATFORM_FILES
+         ${PLATFORM_FILES}
+         ${PROJECT_SOURCE_DIR}/src/platform/riscos/riscos.c
++        ${PROJECT_SOURCE_DIR}/src/platform/riscos/riscos_present.c
++    )
++elseif (RISCOS_PRESENT_TEST)
++    add_definitions(-DPLATFORM_RISCOS_PRESENT -DPLATFORM_USE_SOFTWARE_CURSOR)
++    set(PLATFORM_FILES
++        ${PLATFORM_FILES}
++        ${PROJECT_SOURCE_DIR}/src/platform/riscos/riscos_present.c
+     )
+ elseif (NINTENDO_SWITCH)
+     set(PLATFORM_FILES
+diff --git a/src/platform/julius.c b/src/platform/julius.c
+index 606d6407..096a4097 100644
+--- a/src/platform/julius.c
++++ b/src/platform/julius.c
+@@ -32,6 +32,7 @@
+ #include "platform/emscripten/emscripten.h"
+ #include "platform/ios/ios.h"
+ #include "platform/riscos/riscos.h"
++#include "platform/riscos/riscos_present.h"
+ #include "platform/switch/switch.h"
+ #include "platform/vita/vita.h"
+ 
+@@ -221,7 +222,11 @@ static void run_and_draw(void)
+ static void handle_mouse_button(SDL_MouseButtonEvent *event, int is_down)
+ {
+     if (!SDL_GetRelativeMouseMode()) {
+-        mouse_set_position(event->x, event->y);
++        int x = event->x, y = event->y;
++#ifdef PLATFORM_RISCOS_PRESENT
++        riscos_present_window_to_canvas(&x, &y);
++#endif
++        mouse_set_position(x, y);
+     }
+     if (event->button == SDL_BUTTON_LEFT) {
+         mouse_set_left_down(is_down);
+@@ -288,7 +293,11 @@ static void handle_event(SDL_Event *event)
+             break;
+         case SDL_MOUSEMOTION:
+             if (event->motion.which != SDL_TOUCH_MOUSEID && !SDL_GetRelativeMouseMode()) {
+-                mouse_set_position(event->motion.x, event->motion.y);
++                int x = event->motion.x, y = event->motion.y;
++#ifdef PLATFORM_RISCOS_PRESENT
++                riscos_present_window_to_canvas(&x, &y);
++#endif
++                mouse_set_position(x, y);
+             }
+             break;
+         case SDL_MOUSEBUTTONDOWN:
+diff --git a/src/platform/riscos/riscos_present.c b/src/platform/riscos/riscos_present.c
+new file mode 100644
+index 00000000..a65db67d
+--- /dev/null
++++ b/src/platform/riscos/riscos_present.c
+@@ -0,0 +1,344 @@
++#include "platform/riscos/riscos_present.h"
++
++#ifdef PLATFORM_RISCOS_PRESENT
++
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define CELL_W 64
++#define CELL_H 16
++#define MAX_UPDATE_RECTS 64
++#define STATS_INTERVAL_MS 10000
++
++typedef struct {
++    int x0, y0, x1, y1; /* canvas coordinates, x1/y1 exclusive */
++} cell_rect;
++
++static struct {
++    color_t *shadow;      /* the last frame presented */
++    int sw, sh;           /* canvas size */
++    SDL_Surface *surface; /* the window surface it was presented to */
++    int dw, dh;           /* surface size */
++    Uint32 format;
++    int direct;           /* 32-bit RGB in either order: drawn here */
++    int swap;             /* red and blue swapped (XBGR, the usual RISC OS order) */
++    int *xmap, *ymap;     /* surface x/y -> canvas x/y */
++    int *xstart, *ystart; /* canvas x/y -> first surface x/y showing it */
++    uint32_t *rowbuf;
++    unsigned char *dirty;
++    int cols, bands;
++    cell_rect *rects;
++    int max_rects;
++    int *open, *next;     /* rect indices reaching the band above / this band */
++    int full;
++    /* statistics for the log */
++    Uint32 stats_start;
++    unsigned frames, full_frames, cells, pixels;
++    Uint64 ticks;
++} p = { .full = 1 };
++
++void riscos_present_reset(void)
++{
++    p.full = 1;
++}
++
++static void free_maps(void)
++{
++    free(p.shadow); free(p.xmap); free(p.ymap); free(p.xstart); free(p.ystart);
++    free(p.rowbuf); free(p.dirty); free(p.rects); free(p.open); free(p.next);
++    p.shadow = 0; p.xmap = p.ymap = p.xstart = p.ystart = 0;
++    p.rowbuf = 0; p.dirty = 0; p.rects = 0; p.open = p.next = 0;
++}
++
++/* Nearest-neighbour map from n_dst positions onto n_src, and its inverse
++ * (start[s] = first destination showing source s; start[n_src] = n_dst). */
++static void make_map(int *map, int *start, int n_src, int n_dst)
++{
++    int s = 0;
++    for (int d = 0; d < n_dst; d++) {
++        map[d] = (int) ((int64_t) d * n_src / n_dst);
++        while (s <= map[d]) {
++            start[s++] = d;
++        }
++    }
++    while (s <= n_src) {
++        start[s++] = n_dst;
++    }
++}
++
++static int setup(SDL_Surface *surface, int sw, int sh)
++{
++    free_maps();
++    p.sw = sw;
++    p.sh = sh;
++    p.dw = surface->w;
++    p.dh = surface->h;
++    p.surface = surface;
++    p.format = surface->format->format;
++    /* Formats drawn directly (SDL counts XRGB8888 as 24 bits per pixel). */
++    p.swap = p.format == SDL_PIXELFORMAT_XBGR8888 || p.format == SDL_PIXELFORMAT_ABGR8888;
++    p.direct = p.swap || p.format == SDL_PIXELFORMAT_XRGB8888 || p.format == SDL_PIXELFORMAT_ARGB8888;
++#ifndef __riscos__
++    if (getenv("RISCOS_PRESENT_SWAP")) {
++        p.swap = 1; /* host test: draw as for an XBGR screen */
++    }
++#endif
++    p.cols = (sw + CELL_W - 1) / CELL_W;
++    p.bands = (sh + CELL_H - 1) / CELL_H;
++    p.max_rects = p.cols * p.bands;
++    p.shadow = malloc((size_t) sw * sh * sizeof(color_t));
++    p.xmap = malloc(sizeof(int) * p.dw);
++    p.ymap = malloc(sizeof(int) * p.dh);
++    p.xstart = malloc(sizeof(int) * (sw + 1));
++    p.ystart = malloc(sizeof(int) * (sh + 1));
++    p.rowbuf = malloc(sizeof(uint32_t) * p.dw);
++    p.dirty = malloc((size_t) p.cols * p.bands);
++    p.rects = malloc(sizeof(cell_rect) * p.max_rects);
++    p.open = malloc(sizeof(int) * p.cols);
++    p.next = malloc(sizeof(int) * p.cols);
++    if (!p.shadow || !p.xmap || !p.ymap || !p.xstart || !p.ystart || !p.rowbuf || !p.dirty || !p.rects ||
++        !p.open || !p.next) {
++        free_maps();
++        p.surface = 0;
++        return 0;
++    }
++    make_map(p.xmap, p.xstart, sw, p.dw);
++    make_map(p.ymap, p.ystart, sh, p.dh);
++    p.full = 1;
++    SDL_Log("RISC OS presenter: %d x %d shown in %d x %d (%s, %s)", sw, sh, p.dw, p.dh,
++        SDL_GetPixelFormatName(p.format), p.direct ? (p.swap ? "drawn, red and blue swapped" : "drawn") : "by SDL");
++    return 1;
++}
++
++/* Compares the canvas with the last frame; copies what changed into the
++ * shadow and marks those cells. Returns the number of dirty cells. */
++static int find_changes(const color_t *canvas)
++{
++    int count = 0;
++    if (p.full) {
++        memcpy(p.shadow, canvas, (size_t) p.sw * p.sh * sizeof(color_t));
++        memset(p.dirty, 1, (size_t) p.cols * p.bands);
++        return p.cols * p.bands;
++    }
++    for (int b = 0; b < p.bands; b++) {
++        int y0 = b * CELL_H;
++        int y1 = y0 + CELL_H > p.sh ? p.sh : y0 + CELL_H;
++        unsigned char *dirty = &p.dirty[b * p.cols];
++        for (int c = 0; c < p.cols; c++) {
++            int x0 = c * CELL_W;
++            size_t bytes = (size_t) ((x0 + CELL_W > p.sw ? p.sw : x0 + CELL_W) - x0) * sizeof(color_t);
++            dirty[c] = 0;
++            for (int y = y0; y < y1; y++) {
++                size_t offset = (size_t) y * p.sw + x0;
++                if (memcmp(&canvas[offset], &p.shadow[offset], bytes) != 0) {
++                    for (; y < y1; y++) {
++                        offset = (size_t) y * p.sw + x0;
++                        memcpy(&p.shadow[offset], &canvas[offset], bytes);
++                    }
++                    dirty[c] = 1;
++                    count++;
++                    break;
++                }
++            }
++        }
++    }
++    return count;
++}
++
++/* Runs of dirty cells in each band; a run spanning the same columns as a
++ * rectangle that reached the band above extends that rectangle down. */
++static int collect_rects(void)
++{
++    int n = 0;
++    int open_count = 0, next_count = 0;
++    int *open = p.open, *next = p.next;
++    for (int b = 0; b < p.bands; b++) {
++        int y0 = b * CELL_H;
++        int y1 = y0 + CELL_H > p.sh ? p.sh : y0 + CELL_H;
++        const unsigned char *dirty = &p.dirty[b * p.cols];
++        next_count = 0;
++        for (int c = 0; c < p.cols;) {
++            if (!dirty[c]) {
++                c++;
++                continue;
++            }
++            int c0 = c;
++            while (c < p.cols && dirty[c]) {
++                c++;
++            }
++            int x0 = c0 * CELL_W;
++            int x1 = c * CELL_W > p.sw ? p.sw : c * CELL_W;
++            int index = -1;
++            for (int i = 0; i < open_count; i++) {
++                cell_rect *r = &p.rects[open[i]];
++                if (r->x0 == x0 && r->x1 == x1 && r->y1 == y0) {
++                    r->y1 = y1;
++                    index = open[i];
++                    break;
++                }
++            }
++            if (index < 0) {
++                index = n++;
++                p.rects[index].x0 = x0;
++                p.rects[index].x1 = x1;
++                p.rects[index].y0 = y0;
++                p.rects[index].y1 = y1;
++            }
++            next[next_count++] = index;
++        }
++        int *t = open;
++        open = next;
++        next = t;
++        open_count = next_count;
++    }
++    return n;
++}
++
++static inline uint32_t to_xbgr(color_t c)
++{
++    return __builtin_bswap32(c << 8);
++}
++
++/* Scales and converts the canvas rectangle into the surface. Returns the
++ * surface rectangle drawn. */
++static SDL_Rect draw_rect(const cell_rect *r)
++{
++    SDL_Rect out;
++    int dx0 = p.xstart[r->x0], dx1 = p.xstart[r->x1];
++    int dy0 = p.ystart[r->y0], dy1 = p.ystart[r->y1];
++    out.x = dx0;
++    out.y = dy0;
++    out.w = dx1 - dx0;
++    out.h = dy1 - dy0;
++    if (out.w <= 0 || out.h <= 0) {
++        out.w = out.h = 0;
++        return out;
++    }
++    int swap = p.swap;
++    uint8_t *pixels = (uint8_t *) p.surface->pixels;
++    int pitch = p.surface->pitch;
++    int last_sy = -1;
++    for (int dy = dy0; dy < dy1; dy++) {
++        int sy = p.ymap[dy];
++        if (sy != last_sy) {
++            const color_t *src = &p.shadow[(size_t) sy * p.sw];
++            uint32_t *buf = p.rowbuf;
++            if (swap) {
++                for (int dx = dx0; dx < dx1; dx++) {
++                    *buf++ = to_xbgr(src[p.xmap[dx]]);
++                }
++            } else {
++                for (int dx = dx0; dx < dx1; dx++) {
++                    *buf++ = src[p.xmap[dx]];
++                }
++            }
++            last_sy = sy;
++        }
++        memcpy(pixels + (size_t) dy * pitch + (size_t) dx0 * 4, p.rowbuf, (size_t) out.w * 4);
++    }
++    p.pixels += (unsigned) (out.w * out.h);
++    return out;
++}
++
++/* Surfaces in other formats (16 or 8 bits per pixel desktops): SDL does it. */
++static void present_generic(SDL_Window *window, SDL_Surface *surface, const color_t *canvas)
++{
++    SDL_Surface *src = SDL_CreateRGBSurfaceWithFormatFrom((void *) canvas, p.sw, p.sh, 32,
++        p.sw * (int) sizeof(color_t), SDL_PIXELFORMAT_ARGB8888);
++    if (src) {
++        /* The canvas's alpha isn't set: copy, don't blend. */
++        SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
++        SDL_BlitScaled(src, NULL, surface, NULL);
++        SDL_FreeSurface(src);
++        SDL_UpdateWindowSurface(window);
++    }
++}
++
++void riscos_present_frame(SDL_Window *window, const color_t *canvas, int canvas_w, int canvas_h)
++{
++    Uint64 start = SDL_GetPerformanceCounter();
++    SDL_Surface *surface = SDL_GetWindowSurface(window);
++    if (!surface || !canvas) {
++        return;
++    }
++    if (surface != p.surface || surface->w != p.dw || surface->h != p.dh ||
++        surface->format->format != p.format || canvas_w != p.sw || canvas_h != p.sh || !p.shadow) {
++        if (!setup(surface, canvas_w, canvas_h)) {
++            return;
++        }
++    }
++    if (!p.direct) {
++        present_generic(window, surface, canvas);
++        return;
++    }
++#ifndef __riscos__
++    if (getenv("RISCOS_PRESENT_FULL")) {
++        p.full = 1; /* host test: present every frame in full */
++    }
++#endif
++    int was_full = p.full;
++    int cells = find_changes(canvas);
++    p.full = 0;
++    if (cells) {
++        int n = collect_rects();
++        SDL_Rect update[MAX_UPDATE_RECTS];
++        SDL_Rect bounds = { 0, 0, 0, 0 };
++        int x0 = p.dw, y0 = p.dh, x1 = 0, y1 = 0;
++        int count = 0;
++        for (int i = 0; i < n; i++) {
++            SDL_Rect r = draw_rect(&p.rects[i]);
++            if (!r.w) {
++                continue;
++            }
++            if (count < MAX_UPDATE_RECTS) {
++                update[count] = r;
++            }
++            count++;
++            if (r.x < x0) x0 = r.x;
++            if (r.y < y0) y0 = r.y;
++            if (r.x + r.w > x1) x1 = r.x + r.w;
++            if (r.y + r.h > y1) y1 = r.y + r.h;
++        }
++        if (count > MAX_UPDATE_RECTS) {
++            bounds.x = x0;
++            bounds.y = y0;
++            bounds.w = x1 - x0;
++            bounds.h = y1 - y0;
++            SDL_UpdateWindowSurfaceRects(window, &bounds, 1);
++        } else if (count) {
++            SDL_UpdateWindowSurfaceRects(window, update, count);
++        }
++    }
++
++    /* Statistics, logged every 10 seconds. */
++    Uint32 now = SDL_GetTicks();
++    if (!p.stats_start) {
++        p.stats_start = now;
++    }
++    p.frames++;
++    p.full_frames += was_full;
++    p.cells += (unsigned) cells;
++    p.ticks += SDL_GetPerformanceCounter() - start;
++    if (now - p.stats_start >= STATS_INTERVAL_MS && p.frames) {
++        SDL_Log("Present: %u frames (%u full), %.1f%% of cells changed, %u pixels drawn a frame, %.2f ms a frame",
++            p.frames, p.full_frames, 100.0 * p.cells / ((double) p.frames * p.cols * p.bands),
++            p.pixels / p.frames, p.ticks * 1000.0 / SDL_GetPerformanceFrequency() / p.frames);
++        p.stats_start = now;
++        p.frames = p.full_frames = p.cells = p.pixels = 0;
++        p.ticks = 0;
++    }
++}
++
++void riscos_present_window_to_canvas(int *x, int *y)
++{
++    if (!p.xmap) {
++        return;
++    }
++    if (*x < 0) *x = 0;
++    if (*y < 0) *y = 0;
++    *x = *x < p.dw ? p.xmap[*x] : p.sw - 1;
++    *y = *y < p.dh ? p.ymap[*y] : p.sh - 1;
++}
++
++#endif // PLATFORM_RISCOS_PRESENT
+diff --git a/src/platform/riscos/riscos_present.h b/src/platform/riscos/riscos_present.h
+new file mode 100644
+index 00000000..a36ee37a
+--- /dev/null
++++ b/src/platform/riscos/riscos_present.h
+@@ -0,0 +1,37 @@
++#ifndef PLATFORM_RISCOS_PRESENT_H
++#define PLATFORM_RISCOS_PRESENT_H
++
++/*
++ * RISC OS presenter: puts the game's canvas (ARGB8888, logical size) in the
++ * SDL window surface, scaled to the window, without an SDL renderer.
++ *
++ * SDL's software renderer converts and scales the whole frame every frame,
++ * and with a scale that isn't a whole number (Julius's 150%) and the RISC OS
++ * screen's XBGR order it takes SDL's slowest path: about 75 ms a frame on a
++ * Pi 4 at 1920 x 1200. This keeps a copy of the last frame presented and
++ * only converts, scales and plots the 64 x 16 pixel cells that changed.
++ *
++ * Built on RISC OS, or anywhere with -DPLATFORM_RISCOS_PRESENT (for testing).
++ */
++
++#if defined(__riscos__) && !defined(PLATFORM_RISCOS_PRESENT)
++#define PLATFORM_RISCOS_PRESENT
++#endif
++
++#ifdef PLATFORM_RISCOS_PRESENT
++
++#include "graphics/color.h"
++
++#include "SDL.h"
++
++/* Presents canvas (canvas_w x canvas_h). */
++void riscos_present_frame(SDL_Window *window, const color_t *canvas, int canvas_w, int canvas_h);
++
++/* Forgets the last frame: the next one is presented in full. */
++void riscos_present_reset(void);
++
++/* Window (SDL) coordinates to canvas coordinates. */
++void riscos_present_window_to_canvas(int *x, int *y);
++
++#endif // PLATFORM_RISCOS_PRESENT
++#endif // PLATFORM_RISCOS_PRESENT_H
+diff --git a/src/platform/screen.c b/src/platform/screen.c
+index 2ada5e5f..f6f4c551 100644
+--- a/src/platform/screen.c
++++ b/src/platform/screen.c
+@@ -7,15 +7,18 @@
+ #include "graphics/graphics.h"
+ #include "graphics/screen.h"
+ #include "input/cursor.h"
++#include "input/mouse.h"
+ #include "platform/android/android.h"
+ #include "platform/cursor.h"
+ #include "platform/riscos/riscos.h"
++#include "platform/riscos/riscos_present.h"
+ #include "platform/switch/switch.h"
+ #include "platform/vita/vita.h"
+ 
+ #include "SDL.h"
+ 
+ #include <stdlib.h>
++#include <string.h>
+ 
+ static struct {
+     SDL_Window *window;
+@@ -155,6 +158,10 @@ int platform_screen_create(const char *title, int display_scale_percentage, int
+         SDL_GetWindowSize(SDL.window, &width, &height);
+     }
+ 
++#ifdef PLATFORM_RISCOS_PRESENT
++    SDL_Log("Using the RISC OS presenter, no renderer");
++    riscos_present_reset();
++#else
+     SDL_Log("Creating renderer");
+     SDL.renderer = SDL_CreateRenderer(SDL.window, -1, SDL_RENDERER_PRESENTVSYNC);
+     if (!SDL.renderer) {
+@@ -165,6 +172,7 @@ int platform_screen_create(const char *title, int display_scale_percentage, int
+             return 0;
+         }
+     }
++#endif
+ 
+     if (fullscreen) {
+         SDL_SetWindowGrab(SDL.window, SDL_TRUE);
+@@ -202,6 +210,19 @@ int platform_screen_resize(int pixel_width, int pixel_height)
+     int logical_width = scale_pixels_to_logical(pixel_width);
+     int logical_height = scale_pixels_to_logical(pixel_height);
+ 
++#ifdef PLATFORM_RISCOS_PRESENT
++    static int have_size;
++    riscos_present_reset();
++    if (have_size && logical_width == screen_width() && logical_height == screen_height()) {
++        return 1;
++    }
++    have_size = 1;
++    setting_set_display(setting_fullscreen(), logical_width, logical_height);
++    SDL_Log("Canvas: %d x %d", logical_width, logical_height);
++    screen_set_resolution(logical_width, logical_height);
++    return 1;
++#endif
++
+     if (SDL.texture) {
+         if (logical_width == screen_width() && logical_height == screen_height()) {
+             return 1;
+@@ -388,6 +409,120 @@ void platform_screen_recreate_texture(void)
+ }
+ #endif
+ 
++#ifdef PLATFORM_RISCOS_PRESENT
++static struct {
++    color_t *pixels[CURSOR_MAX];
++    int size[CURSOR_MAX];
++    color_t *backup;
++    int backup_size;
++} riscos_cursor;
++
++static int blend_channel(color_t c, color_t b, unsigned a, int shift)
++{
++    return (int) ((((c >> shift) & 0xff) * a + ((b >> shift) & 0xff) * (255 - a)) / 255);
++}
++
++/* Blends the game's pointer into the canvas, keeping what was under it in
++ * *saved (x, y, w, h): the presenter then sees it as a change, and the
++ * canvas is put back afterwards, so the game never sees the pointer. */
++static int riscos_cursor_draw(SDL_Rect *saved)
++{
++    const mouse *m = mouse_get();
++    int id = platform_cursor_get_current_shape();
++    if (m->is_touch || !m->is_inside_window || !riscos_cursor.pixels[id] || !framebuffer) {
++        return 0;
++    }
++    const cursor *c = input_cursor_data(id, platform_cursor_get_current_scale());
++    if (!c) {
++        return 0;
++    }
++    int size = riscos_cursor.size[id];
++    int logical = calc_adjust_with_percentage(size, calc_percentage(100, scale.percentage));
++    if (logical <= 0) {
++        return 0;
++    }
++    int x0 = m->x - c->hotspot_x, y0 = m->y - c->hotspot_y;
++    int cx0 = SDL_max(x0, 0), cy0 = SDL_max(y0, 0);
++    int cx1 = SDL_min(x0 + logical, screen_width()), cy1 = SDL_min(y0 + logical, screen_height());
++    if (cx0 >= cx1 || cy0 >= cy1) {
++        return 0;
++    }
++    int w = cx1 - cx0, h = cy1 - cy0;
++    if (w * h > riscos_cursor.backup_size) {
++        free(riscos_cursor.backup);
++        riscos_cursor.backup = malloc(sizeof(color_t) * w * h);
++        riscos_cursor.backup_size = riscos_cursor.backup ? w * h : 0;
++        if (!riscos_cursor.backup) {
++            return 0;
++        }
++    }
++    const color_t *pixels = riscos_cursor.pixels[id];
++    int pitch = screen_width();
++    for (int y = cy0; y < cy1; y++) {
++        color_t *row = &framebuffer[y * pitch];
++        memcpy(&riscos_cursor.backup[(y - cy0) * w], &row[cx0], sizeof(color_t) * w);
++        const color_t *src = &pixels[((y - y0) * size / logical) * size];
++        for (int x = cx0; x < cx1; x++) {
++            color_t cp = src[(x - x0) * size / logical];
++            unsigned a = cp >> 24;
++            if (a == 255) {
++                row[x] = cp;
++            } else if (a) {
++                color_t b = row[x];
++                row[x] = (b & 0xff000000) | (blend_channel(cp, b, a, 16) << 16) |
++                    (blend_channel(cp, b, a, 8) << 8) | blend_channel(cp, b, a, 0);
++            }
++        }
++    }
++    saved->x = cx0;
++    saved->y = cy0;
++    saved->w = w;
++    saved->h = h;
++    return 1;
++}
++
++static void riscos_cursor_restore(const SDL_Rect *saved)
++{
++    int pitch = screen_width();
++    for (int y = 0; y < saved->h; y++) {
++        memcpy(&framebuffer[(saved->y + y) * pitch + saved->x], &riscos_cursor.backup[y * saved->w],
++            sizeof(color_t) * saved->w);
++    }
++}
++
++void platform_screen_clear(void)
++{
++    riscos_present_reset();
++}
++
++void platform_screen_update(void)
++{
++    SDL_Rect saved;
++    int drawn = riscos_cursor_draw(&saved);
++    riscos_present_frame(SDL.window, graphics_canvas(), screen_width(), screen_height());
++    if (drawn) {
++        riscos_cursor_restore(&saved);
++    }
++}
++
++void platform_screen_render(void)
++{
++}
++
++void platform_screen_generate_mouse_cursor_texture(int cursor_id, cursor_scale scale, const color_t *cursor_colors)
++{
++    const cursor *c = input_cursor_data(cursor_id, scale);
++    int size = platform_cursor_get_texture_size(c->width, c->height);
++    free(riscos_cursor.pixels[cursor_id]);
++    riscos_cursor.pixels[cursor_id] = malloc(sizeof(color_t) * size * size);
++    if (riscos_cursor.pixels[cursor_id]) {
++        memcpy(riscos_cursor.pixels[cursor_id], cursor_colors, sizeof(color_t) * size * size);
++        riscos_cursor.size[cursor_id] = size;
++    }
++}
++
++#else
++
+ void platform_screen_clear(void)
+ {
+     SDL_RenderClear(SDL.renderer);
+@@ -427,6 +562,7 @@ void platform_screen_generate_mouse_cursor_texture(int cursor_id, cursor_scale s
+     SDL_UpdateTexture(SDL.cursors[cursor_id], NULL, cursor_colors, size * sizeof(color_t));
+     SDL_SetTextureBlendMode(SDL.cursors[cursor_id], SDL_BLENDMODE_BLEND);
+ }
++#endif // PLATFORM_RISCOS_PRESENT
+ 
+ void system_set_mouse_position(int *x, int *y)
+ {
+-- 
+2.43.0
+
