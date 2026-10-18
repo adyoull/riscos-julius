@@ -1,0 +1,43 @@
+From 400d27d6cab23401fc7f13f65e0811de3a4ba236 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 18 Oct 2026 13:11:20 +0100
+Subject: [PATCH 5/5] RISC OS: keep to the frame limit
+
+riscos3test on the Pi ran at 61-81 frames a second at times, over the
+50 limit. On RISC OS SDL_Delay waits in whole centiseconds with
+Wimp_PollIdle until the next tick of the centisecond clock, so a 12 ms
+wait can end after anything from 0 to 10 ms. Wait again while 5 ms or
+more of the frame remain (shorter waits would busy-wait), so the game
+keeps close to Julius$FPS and leaves the rest of the time to the desktop.
+---
+ src/platform/riscos/riscos.c | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/src/platform/riscos/riscos.c b/src/platform/riscos/riscos.c
+index a3b2d7f8..1346d5d5 100644
+--- a/src/platform/riscos/riscos.c
++++ b/src/platform/riscos/riscos.c
+@@ -109,8 +109,18 @@ void platform_per_frame_callback(void)
+             data.frames = data.busy_ms = data.slowest_ms = 0;
+         }
+     }
+-    if (data.frame_ms > 0 && busy < (Uint32) data.frame_ms) {
+-        SDL_Delay(data.frame_ms - busy);
++    if (data.frame_ms > 0) {
++        /* SDL_Delay waits in whole centiseconds with Wimp_PollIdle, until the
++         * next tick of the centisecond clock: it can return up to 10 ms early.
++         * Wait again while 5 ms or more remain (shorter waits would busy-wait). */
++        Uint32 deadline = data.last_frame + (Uint32) data.frame_ms;
++        for (int tries = 0; tries < 10; tries++) {
++            Sint32 remaining = (Sint32) (deadline - SDL_GetTicks());
++            if (remaining < 5) {
++                break;
++            }
++            SDL_Delay((Uint32) remaining);
++        }
+     }
+     data.last_frame = SDL_GetTicks();
+ }
+-- 
+2.43.0
+

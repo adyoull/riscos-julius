@@ -1,5 +1,14 @@
 # Changes in the RISC OS port
 
+## 1.8.0-riscos4test (2026-10-18)
+- riscos3test on the Pi 4 (owner): presenting takes 6.6-7 ms a frame at
+  1920 x 1200 (was 14) with NEON; in a city a steady 49 frames a second,
+  which is the 50 limit. But at times 61-81: over the limit.
+- `patches/julius/0005`: SDL_Delay on RISC OS waits until the next tick of
+  the centisecond clock, so it can return up to 10 ms early. The frame
+  limiter now waits again while 5 ms or more remain, still yielding to the
+  desktop (never busy-waiting).
+
 ## 1.8.0-riscos3test (2026-10-18)
 Faster comparison of each frame with the last one.
 
