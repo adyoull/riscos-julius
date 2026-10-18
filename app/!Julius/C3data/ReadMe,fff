@@ -1,0 +1,26 @@
+Caesar III game files go here
+=============================
+
+Julius needs the files of the original Caesar III, version 1.0.1.0 (the
+GOG and Steam versions are; an older CD needs the 1.0.1.0 patch).
+
+From an installed copy (GOG, Steam, or a Windows installation) copy
+everything from the Caesar 3 folder into this folder, including the
+555, smk and wavs folders.
+
+From the CD: the files are in two places.
+ - 555, SMK and wavs on the CD: copy these folders here (SMK as smk).
+   Copy the CD's Soundfx files into wavs as well.
+ - The other files are inside the installer archive data1.cab; unpack
+   it on another computer (for instance with "unshield x data1.cab")
+   and copy the files from its Exe folder here.
+
+When it's right this folder holds, among others, c3.eng, c3_mm.eng,
+C3.sg2, C3.555 and the folders 555, smk and wavs.
+
+One file is called "North African" with a space. Copied from a PC, Mac,
+network share or FAT card, RISC OS shows the space as a hard space;
+that's the name Julius looks for.
+
+Saved games and Julius's settings (julius.ini) are kept here too.
+Or keep the files anywhere and *Set Julius$Data to that directory.

@@ -1,0 +1,61 @@
+Julius for RISC OS
+==================
+
+Julius is an open-source version of Caesar III, the Roman city-building
+game by Impressions Games (1998). It plays exactly like the original and
+reads and writes the same saved games, with a few improvements: any
+window size, wider screens, and many small interface conveniences.
+
+  Julius:      https://github.com/bvschaik/julius
+  This port:   https://github.com/adyoull/riscos-julius
+
+Version: see docs.Version.
+
+You need the original game
+--------------------------
+Julius uses the pictures, sounds, films and scenarios of the original
+Caesar III, version 1.0.1.0 (CD, GOG or Steam). They aren't included.
+Copy them into !Julius.C3data: C3data.ReadMe says which files and how to
+get them off the CD. Or keep them elsewhere and *Set Julius$Data to
+their directory.
+
+What you need
+-------------
+- RISC OS 5 on an ARMv7 machine with VFP (Raspberry Pi 2 or later,
+  BeagleBoard, Titanium, ...). A Pi 4 is recommended.
+- The ARMEABISupport module and SharedUnixLibrary 1.16 or later (from
+  !PackMan) in !System.
+- For sound: SharedSoundBuffer and StreamManager, in ssb.zip on the
+  RDPClient page: https://orac.co.uk/software/rdpclient/rdpclient.html
+  John Duffell's own site (now on the Internet Archive) has more details:
+  https://web.archive.org/web/20110920080106/http://www.duffell.riscos.me.uk/
+  Merge ssb.zip's !System with yours. SharedSound is part of RISC OS.
+  Without them the game is silent.
+- About 60 MB of free memory, plus 16 MB for the program.
+
+Playing
+-------
+Double-click !Julius. The game opens full screen (a desktop window that
+covers the screen, so other programs keep running). F6 or Alt-Enter
+switch between a window and full screen.
+The arrow keys scroll the map.
+
+Settings and saved games are kept in the data folder (C3data).
+
+In !Run you can:
+- set Julius$FPS: frames drawn per second (default 50; 0 = no limit),
+- turn on a log (<Wimp$ScrapDir>.juliuslog) to send with a report.
+
+Problems
+--------
+Report them at https://github.com/adyoull/riscos-julius/issues with the
+log (see !Run).
+
+Licence
+-------
+Julius is free software under the GNU Affero General Public License
+version 3 (docs.COPYING). Its source and the RISC OS changes are at the
+addresses above. Caesar III is (c) Activision; its files are not part of
+this program.
+
+PThreadTicker is (c) its authors; see docs.PThreadTicker-Licence.

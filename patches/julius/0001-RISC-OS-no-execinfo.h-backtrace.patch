@@ -1,0 +1,25 @@
+From 690383b2f57f67619930455751c0efe5fe7961f5 Mon Sep 17 00:00:00 2001
+From: Andrew Youll <adyoull@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 11:53:11 +0100
+Subject: [PATCH 1/2] RISC OS: no execinfo.h backtrace
+
+---
+ src/core/backtrace.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/core/backtrace.c b/src/core/backtrace.c
+index 19f9b13..624f2c1 100644
+--- a/src/core/backtrace.c
++++ b/src/core/backtrace.c
+@@ -4,7 +4,7 @@
+ 
+ #if defined(__GNUC__) && !defined(__MINGW32__) && !defined(__OpenBSD__) && \
+     !defined(__vita__) && !defined(__SWITCH__) && !defined(__ANDROID__) && \
+-    !defined(__HAIKU__) && !defined(__EMSCRIPTEN__) && \
++    !defined(__HAIKU__) && !defined(__EMSCRIPTEN__) && !defined(__riscos__) && \
+     (!defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1050)
+ 
+ #include <execinfo.h>
+-- 
+2.43.0
+

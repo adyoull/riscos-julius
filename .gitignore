@@ -1,0 +1,8 @@
+dl/
+work/
+dist/
+handoffs/
+*handoff*.md
+CLAUDE.md
+*START-HERE*.md
+.DS_Store

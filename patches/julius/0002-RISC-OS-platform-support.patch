@@ -1,0 +1,333 @@
+From 44903fb5088cc3ede1a7677763b4a452d066c87f Mon Sep 17 00:00:00 2001
+From: Andrew Youll <adyoull@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 12:06:48 +0100
+Subject: [PATCH 2/2] RISC OS: platform support
+
+Adds src/platform/riscos (built when CMake's RISCOS is set):
+- stdout/stderr go to <Julius$Log> or /dev/null (nothing may print in
+  the desktop; one write handle shared with dup2);
+- the data folder comes from Julius$Data when no folder is given;
+- a missing data folder is reported with Wimp_ReportError (SDL has no
+  message boxes on RISC OS);
+- spaces in file names become hard spaces ("North African.sg2"), as
+  RISC OS filing systems store them;
+- no file name case correction (RISC OS filing systems ignore case);
+- the game draws its own pointer;
+- each frame waits for the rest of its time (Julius$FPS, default 50)
+  with SDL_Delay, which yields to the desktop: with no vsync the main
+  loop otherwise runs flat out;
+- with a log, a "Frames:" line every 10 seconds;
+- the C heap goes in a "Julius Heap" dynamic area.
+---
+ CMakeLists.txt               |   5 ++
+ src/platform/cursor.c        |   1 +
+ src/platform/file_manager.c  |   9 ++-
+ src/platform/julius.c        |  16 +++++
+ src/platform/riscos/riscos.c | 118 +++++++++++++++++++++++++++++++++++
+ src/platform/riscos/riscos.h |  32 ++++++++++
+ src/platform/screen.c        |   1 +
+ 7 files changed, 181 insertions(+), 1 deletion(-)
+ create mode 100644 src/platform/riscos/riscos.c
+ create mode 100644 src/platform/riscos/riscos.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b725e9a..cfc318a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -224,6 +224,11 @@ if (${TARGET_PLATFORM} STREQUAL "vita")
+         ${PROJECT_SOURCE_DIR}/src/platform/vita/vita.c
+         ${PROJECT_SOURCE_DIR}/src/platform/vita/vita_keyboard.c
+     )
++elseif (RISCOS)
++    set(PLATFORM_FILES
++        ${PLATFORM_FILES}
++        ${PROJECT_SOURCE_DIR}/src/platform/riscos/riscos.c
++    )
+ elseif (NINTENDO_SWITCH)
+     set(PLATFORM_FILES
+         ${PLATFORM_FILES}
+diff --git a/src/platform/cursor.c b/src/platform/cursor.c
+index cde3ba2..dfbf5b7 100644
+--- a/src/platform/cursor.c
++++ b/src/platform/cursor.c
+@@ -4,6 +4,7 @@
+ #include "graphics/color.h"
+ #include "input/cursor.h"
+ #include "platform/screen.h"
++#include "platform/riscos/riscos.h"
+ #include "platform/switch/switch.h"
+ #include "platform/vita/vita.h"
+ 
+diff --git a/src/platform/file_manager.c b/src/platform/file_manager.c
+index 958df39..b766456 100644
+--- a/src/platform/file_manager.c
++++ b/src/platform/file_manager.c
+@@ -6,6 +6,7 @@
+ #include "platform/android/android.h"
+ #include "platform/emscripten/emscripten.h"
+ #include "platform/file_manager_cache.h"
++#include "platform/riscos/riscos.h"
+ #include "platform/vita/vita.h"
+ 
+ #include <dirent.h>
+@@ -178,7 +179,7 @@ int platform_file_manager_list_directory_contents(
+ 
+ int platform_file_manager_should_case_correct_file(void)
+ {
+-#if defined(_WIN32) || defined(__ANDROID__)
++#if defined(_WIN32) || defined(__ANDROID__) || defined(__riscos__)
+     return 0;
+ #else
+     return 1;
+@@ -295,6 +296,9 @@ FILE *platform_file_manager_open_file(const char *filename, const char *mode)
+             platform_file_manager_cache_add_file_info(filename);
+         }
+     }
++#endif
++#ifdef __riscos__
++    filename = riscos_filename(filename);
+ #endif
+     return fopen(filename, mode);
+ }
+@@ -303,6 +307,9 @@ int platform_file_manager_remove_file(const char *filename)
+ {
+ #ifdef USE_FILE_CACHE
+     platform_file_manager_cache_delete_file_info(filename);
++#endif
++#ifdef __riscos__
++    filename = riscos_filename(filename);
+ #endif
+     return remove(filename) == 0;
+ }
+diff --git a/src/platform/julius.c b/src/platform/julius.c
+index ecf2c7f..606d640 100644
+--- a/src/platform/julius.c
++++ b/src/platform/julius.c
+@@ -31,6 +31,7 @@
+ #include "platform/android/android.h"
+ #include "platform/emscripten/emscripten.h"
+ #include "platform/ios/ios.h"
++#include "platform/riscos/riscos.h"
+ #include "platform/switch/switch.h"
+ #include "platform/vita/vita.h"
+ 
+@@ -497,6 +498,10 @@ static int pre_init(const char *custom_data_dir)
+         SDL_Log("Loading game from %s", custom_data_dir);
+         if (!platform_file_manager_set_base_path(custom_data_dir)) {
+             SDL_Log("%s: directory not found", custom_data_dir);
++#ifdef __riscos__
++            riscos_report_error("Julius can't find the Caesar III folder named by Julius$Data.");
++            return 0;
++#endif
+             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                 "Error",
+                 "Julius requires the original files from Caesar 3.\n\n"
+@@ -557,6 +562,9 @@ static int pre_init(const char *custom_data_dir)
+         }
+         user_dir = ask_for_data_dir(1);
+     }
++#elif defined(__riscos__)
++    riscos_report_error("Julius needs the files from Caesar III (version 1.0.1.0). "
++        "Copy them into !Julius.C3data, or set Julius$Data to the folder that holds them.");
+ #else
+     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+         "Julius requires the original files from Caesar 3 to run.",
+@@ -637,6 +645,9 @@ static void setup(const julius_args *args)
+ int main(int argc, char **argv)
+ {
+     julius_args args;
++#ifdef __riscos__
++    riscos_init_output();
++#endif
+     if (!platform_parse_arguments(argc, argv, &args)) {
+ #if !defined(_WIN32) && !defined(__vita__) && !defined(__SWITCH__) && !defined(__ANDROID__) && !defined(__APPLE__)
+         // Only exit on Linux platforms where we know the system will not throw any weird arguments our way
+@@ -644,6 +655,11 @@ int main(int argc, char **argv)
+ #endif
+     }
+ 
++#ifdef __riscos__
++    if (!args.data_directory) {
++        args.data_directory = riscos_data_directory();
++    }
++#endif
+     setup(&args);
+ 
+     mouse_set_inside_window(1);
+diff --git a/src/platform/riscos/riscos.c b/src/platform/riscos/riscos.c
+new file mode 100644
+index 0000000..a3b2d7f
+--- /dev/null
++++ b/src/platform/riscos/riscos.c
+@@ -0,0 +1,118 @@
++#ifdef __riscos__
++
++#include "platform/riscos/riscos.h"
++
++#include "SDL.h"
++
++#include <kernel.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#define Wimp_ReportError 0x400df
++
++#define DEFAULT_FPS 50
++#define FILENAME_MAX_LENGTH 300
++#define STATS_INTERVAL_MS 10000
++
++/* UnixLib: the C heap goes in a dynamic area with this name, not the WimpSlot. */
++const char *const __dynamic_da_name = "Julius Heap";
++
++static struct {
++    int frame_ms;
++    Uint32 last_frame;
++    char filename[FILENAME_MAX_LENGTH];
++    int logging;
++    Uint32 stats_start;
++    Uint32 frames;
++    Uint32 busy_ms;
++    Uint32 slowest_ms;
++} data;
++
++void riscos_init_output(void)
++{
++    const char *log = getenv("Julius$Log");
++    data.logging = log && *log;
++    const char *target = data.logging ? log : "/dev/null";
++    /* A file can only be open for writing once on RISC OS: open it once, share it. */
++    if (freopen(target, "w", stderr)) {
++        setvbuf(stderr, NULL, _IOLBF, 0);
++        dup2(fileno(stderr), fileno(stdout));
++    }
++}
++
++const char *riscos_data_directory(void)
++{
++    const char *dir = getenv("Julius$Data");
++    if (dir && *dir) {
++        return "/<Julius$Data>";
++    }
++    return 0;
++}
++
++void riscos_report_error(const char *message)
++{
++    struct {
++        int number;
++        char text[252];
++    } error;
++    _kernel_swi_regs r;
++
++    error.number = 0;
++    strncpy(error.text, message, sizeof(error.text) - 1);
++    error.text[sizeof(error.text) - 1] = 0;
++    r.r[0] = (int) &error;
++    r.r[1] = 1; /* OK box */
++    r.r[2] = (int) "Julius";
++    _kernel_swi(Wimp_ReportError, &r, &r);
++}
++
++const char *riscos_filename(const char *filename)
++{
++    if (!filename || !strchr(filename, ' ')) {
++        return filename;
++    }
++    size_t i;
++    for (i = 0; filename[i] && i < FILENAME_MAX_LENGTH - 1; i++) {
++        data.filename[i] = filename[i] == ' ' ? (char) 0xa0 : filename[i];
++    }
++    data.filename[i] = 0;
++    return data.filename;
++}
++
++/* Called at the start of every main loop pass: the time since the end of the
++ * last wait is what the game spent on events, its tick and drawing. */
++void platform_per_frame_callback(void)
++{
++    Uint32 now = SDL_GetTicks();
++    if (!data.frame_ms) {
++        const char *fps_var = getenv("Julius$FPS");
++        int fps = fps_var && *fps_var ? atoi(fps_var) : DEFAULT_FPS;
++        data.frame_ms = fps > 0 && fps <= 1000 ? 1000 / fps : -1;
++        data.last_frame = data.stats_start = now;
++        SDL_Log("RISC OS: frame limit %d ms (Julius$FPS %s)", data.frame_ms, fps_var ? fps_var : "not set");
++        return;
++    }
++    Uint32 busy = now - data.last_frame;
++    if (data.logging) {
++        data.frames++;
++        data.busy_ms += busy;
++        if (busy > data.slowest_ms) {
++            data.slowest_ms = busy;
++        }
++        if (now - data.stats_start >= STATS_INTERVAL_MS) {
++            SDL_Log("Frames: %.1f fps, %.1f ms work a frame, slowest %u ms",
++                data.frames * 1000.0 / (now - data.stats_start),
++                data.frames ? (double) data.busy_ms / data.frames : 0.0, (unsigned) data.slowest_ms);
++            data.stats_start = now;
++            data.frames = data.busy_ms = data.slowest_ms = 0;
++        }
++    }
++    if (data.frame_ms > 0 && busy < (Uint32) data.frame_ms) {
++        SDL_Delay(data.frame_ms - busy);
++    }
++    data.last_frame = SDL_GetTicks();
++}
++
++#endif // __riscos__
+diff --git a/src/platform/riscos/riscos.h b/src/platform/riscos/riscos.h
+new file mode 100644
+index 0000000..abe843c
+--- /dev/null
++++ b/src/platform/riscos/riscos.h
+@@ -0,0 +1,32 @@
++#ifndef PLATFORM_RISCOS_H
++#define PLATFORM_RISCOS_H
++
++#ifdef __riscos__
++
++/*
++ * RISC OS (RISC OS 5, UnixLib) support.
++ *
++ * - The game draws its own mouse pointer (the SDL driver has no colour
++ *   pointers); SDL hides the desktop pointer while it is over the game.
++ * - Each frame waits for the rest of its time with SDL_Delay, which yields
++ *   to the desktop: there is no vsync to slow the main loop down.
++ */
++#define PLATFORM_USE_SOFTWARE_CURSOR
++
++#define PLATFORM_ENABLE_PER_FRAME_CALLBACK
++void platform_per_frame_callback(void);
++
++/* Sends stdout and stderr to <Julius$Log>, or nowhere: nothing may print in the desktop. */
++void riscos_init_output(void);
++
++/* The data folder from Julius$Data ("/<Julius$Data>", expanded by UnixLib), or 0. */
++const char *riscos_data_directory(void);
++
++/* Shows a desktop error box (Wimp_ReportError). */
++void riscos_report_error(const char *message);
++
++/* File names with spaces ("North African.sg2"): RISC OS uses hard spaces. */
++const char *riscos_filename(const char *filename);
++
++#endif // __riscos__
++#endif // PLATFORM_RISCOS_H
+diff --git a/src/platform/screen.c b/src/platform/screen.c
+index 17524da..2ada5e5 100644
+--- a/src/platform/screen.c
++++ b/src/platform/screen.c
+@@ -9,6 +9,7 @@
+ #include "input/cursor.h"
+ #include "platform/android/android.h"
+ #include "platform/cursor.h"
++#include "platform/riscos/riscos.h"
+ #include "platform/switch/switch.h"
+ #include "platform/vita/vita.h"
+ 
+-- 
+2.43.0
+

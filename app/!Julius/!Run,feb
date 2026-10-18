@@ -1,0 +1,51 @@
+| !Run for !Julius - RISC OS port of Julius, the open-source Caesar III
+| Built with GCCSDK GCC 10.2 (arm-riscos-gnueabihf), statically linked with
+| riscos-mesa's SDL2 and converted to an Absolute (AIF) file, so
+| !SharedLibs isn't needed.
+
+Set Julius$Dir <Obey$Dir>
+IconSprites <Julius$Dir>.!Sprites
+
+| --- Game data --------------------------------------------------------
+| Julius needs the files of the original Caesar III (CD, GOG or Steam,
+| version 1.0.1.0). Copy them into C3data inside this application (see
+| C3data.ReadMe), or put them anywhere and *Set Julius$Data to that
+| directory (e.g. in your !Boot). Saved games and settings go there too.
+If "<Julius$Data>"="" Then Set Julius$Data <Julius$Dir>.C3data
+
+| --- Threads ----------------------------------------------------------
+| SDL plays sound on a thread (UnixLib). PThreadTicker keeps it running
+| while the game waits for the desktop. Loaded from !System if there,
+| else ours.
+RMEnsure PThreadTicker 0.01 IfThere System:Modules.PThrTicker Then RMLoad System:Modules.PThrTicker
+RMEnsure PThreadTicker 0.01 RMLoad <Julius$Dir>.PThrTicker
+
+| --- Sound ------------------------------------------------------------
+| Sound goes through SharedSoundBuffer, StreamManager and SharedSound
+| (in !System), mixed with other programs' sound. SharedSound is part of
+| RISC OS; SharedSoundBuffer and StreamManager are in ssb.zip from
+| https://orac.co.uk/software/rdpclient/rdpclient.html. Without them the
+| game plays silently.
+RMEnsure SharedSound 1.07 IfThere System:Modules.SSound Then RMLoad System:Modules.SSound
+RMEnsure StreamManager 0.03 IfThere System:Modules.StreamMan Then RMLoad System:Modules.StreamMan
+RMEnsure SharedSoundBuffer 0.07 IfThere System:Modules.SSBuffer Then RMLoad System:Modules.SSBuffer
+
+| --- Speed ------------------------------------------------------------
+| The game draws at most 50 frames a second and gives the rest of the
+| time back to the desktop. 0 = no limit (uses all the processor time).
+| Set Julius$FPS 30
+
+| --- Logging ----------------------------------------------------------
+| Normally nothing is logged. For a log in <Wimp$ScrapDir>.juliuslog
+| (useful when reporting a problem), remove the | from the next line.
+| Set Julius$LogOn 1
+Unset Julius$Log
+If "<Julius$LogOn>"<>"" Then Set Julius$Log /|<Wimp$ScrapDir>/juliuslog
+Unset Julius$LogOn
+
+| --- Memory -----------------------------------------------------------
+| The C heap goes in a dynamic area ("Julius Heap", about 60 MB), so the
+| WimpSlot only holds the program and its stack.
+WimpSlot -min 20000K -max 20000K
+
+Do Run <Julius$Dir>.julius %*0
