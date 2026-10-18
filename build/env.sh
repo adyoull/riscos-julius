@@ -3,7 +3,7 @@
 # Each can be overridden from the environment.
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-: "${VERSION:=1.8.0-riscos2test}"
+: "${VERSION:=1.8.0-riscos3test}"
 : "${JULIUS_REF:=v1.8.0}"
 : "${JULIUS_GIT:=https://github.com/bvschaik/julius.git}"
 

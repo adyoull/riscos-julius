@@ -1,5 +1,25 @@
 # Changes in the RISC OS port
 
+## 1.8.0-riscos3test (2026-10-18)
+Faster comparison of each frame with the last one.
+
+- riscos2test on the Pi 4 (owner): 38-46 frames a second at 1920 x 1200
+  full screen in a city (was 13), about 50 in the menus. Presenting took
+  about 14 ms a frame though only 1-4% of the picture changed: the time
+  went in comparing the frame with the last one. UnixLib's memcmp
+  compares one byte at a time.
+- `patches/julius/0004`: the comparison goes row by row through memory in
+  order, 8 pixels at a time, skipping cells already known to have
+  changed. On processors with NEON it compares 16 pixels a step (chosen at
+  start-up with SDL_HasNEON(); only that one file uses NEON, so machines
+  without it still work).
+- Tests in `tests/present`: `run.sh` drives the presenter with random
+  changes over many frames at several sizes and both pixel orders and
+  checks every pixel of the result against a plain scaler (AddressSanitizer
+  and UBSan on); `run-neon.sh` checks the NEON comparison against every
+  length and offset as ARM code under QEMU. Both were checked to catch
+  deliberately broken versions.
+
 ## 1.8.0-riscos2test (2026-10-18)
 Much faster drawing.
 
