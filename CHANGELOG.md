@@ -1,5 +1,14 @@
 # Changes in the RISC OS port
 
+## 1.8.0-riscos1 (2026-10-18) — first release
+The riscos4test program with the log turned off by default.
+
+Julius 1.8.0 for RISC OS 5: Caesar III in the desktop, in a window or
+full screen, with sound, music and the films. On a Pi 4 at 1920 x 1200 it
+runs at 50-56 frames a second in a city. Built with riscos-crossdev 1.8.2
+(UnixLib 5.0.3.3) and riscos-mesa devkit 20.3.5-16 (SDL 2.26); SDL2_mixer
+2.6.3. Patches 0001-0005; the test builds below have the details.
+
 ## 1.8.0-riscos4test (2026-10-18)
 - riscos3test on the Pi 4 (owner): presenting takes 6.6-7 ms a frame at
   1920 x 1200 (was 14) with NEON; in a city a steady 49 frames a second,
