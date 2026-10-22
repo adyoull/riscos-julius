@@ -1,0 +1,5 @@
+# NAME TAG: repositories at github.com/adyoull, at a release tag.
+# Read by build/env.sh and by the GitHub workflows (riscos-crossdev's ci/,
+# docs/CI.md). The riscos-crossdev line also chooses the container image.
+riscos-crossdev v1.8.2
+riscos-mesa v20.3.5-17

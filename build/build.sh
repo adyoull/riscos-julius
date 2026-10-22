@@ -7,21 +7,34 @@ set -euo pipefail
 . "$(dirname "$0")/env.sh"
 mkdir -p "$DL" "$WORK" "$STAGE"
 
-if [ ! -d "$CROSSDEV" ]; then
+if [ ! -f "$CROSSDEV/env.sh" ]; then
   git -c advice.detachedHead=false clone -q --branch "$CROSSDEV_REF" --depth 1 "$CROSSDEV_GIT" "$CROSSDEV"
 fi
-export RISCOS_TOOLCHAIN="$CROSSDEV/toolchain/env" RISCOS_DEVKIT="$CROSSDEV/devkit/env" DL
+export DL
+# Toolchain: the image's (RISCOS_TOOLCHAIN set), else crossdev's prebuilt one.
+: "${RISCOS_TOOLCHAIN:=$CROSSDEV/toolchain/env}"
+export RISCOS_TOOLCHAIN
 [ -x "$RISCOS_TOOLCHAIN/bin/arm-riscos-gnueabihf-gcc" ] || "$CROSSDEV/toolchain/install-prebuilt.sh"
-# The devkit named in env.sh (not necessarily crossdev's own).
-if [ "$(cat "$RISCOS_DEVKIT/VERSION" 2>/dev/null)" != "$DEVKIT_VERSION" ]; then
-  [ -s "$DL/$DEVKIT_TARBALL" ] || curl -fsSL -o "$DL/$DEVKIT_TARBALL" "$DEVKIT_URL"
-  echo "$DEVKIT_SHA256  $DL/$DEVKIT_TARBALL" | sha256sum -c --quiet
-  rm -rf "$RISCOS_DEVKIT" && mkdir -p "$RISCOS_DEVKIT"
-  tar xzf "$DL/$DEVKIT_TARBALL" -C "$RISCOS_DEVKIT" --strip-components=1
-  echo "installed $(cat "$RISCOS_DEVKIT/VERSION")"
-  rm -rf "$WORK/build-julius" "$STAGE/lib/libSDL2_mixer.a"   # rebuild against it
+
+# Devkit: the riscos-mesa release in .riscos-deps.
+if [ "$(cat "${RISCOS_DEVKIT:-/nonexistent}/VERSION" 2>/dev/null)" != "$DEVKIT_VERSION" ]; then
+  RISCOS_DEVKIT=$WORK/riscos-mesa-devkit-$MESA_VERSION
+  if [ "$(cat "$RISCOS_DEVKIT/VERSION" 2>/dev/null)" != "$DEVKIT_VERSION" ]; then
+    [ -n "$DEVKIT_SHA256" ] || { echo "build/SHA256SUMS has no line for $DEVKIT_TARBALL" >&2; exit 1; }
+    [ -s "$DL/$DEVKIT_TARBALL" ] || curl -fsSL --retry 3 -o "$DL/$DEVKIT_TARBALL" "$DEVKIT_URL"
+    echo "$DEVKIT_SHA256  $DL/$DEVKIT_TARBALL" | sha256sum -c --quiet
+    rm -rf "$RISCOS_DEVKIT" && mkdir -p "$RISCOS_DEVKIT"
+    tar xzf "$DL/$DEVKIT_TARBALL" -C "$RISCOS_DEVKIT" --strip-components=1
+  fi
 fi
+export RISCOS_DEVKIT
 . "$CROSSDEV/env.sh"
+echo "toolchain: $(head -1 "$RISCOS_TOOLCHAIN/BUILDINFO.txt" 2>/dev/null); devkit: $(cat "$RISCOS_DEVKIT/VERSION")"
+# Everything built here depends on the devkit's SDL: start again when it changes.
+if [ "$(cat "$STAGE/.devkit" 2>/dev/null)" != "$DEVKIT_VERSION" ]; then
+  rm -rf "$STAGE" "$WORK/build-julius"
+  mkdir -p "$STAGE"
+fi
 CFLAGS_RO="$RISCOS_CFLAGS -mtune=cortex-a72"
 
 if [ "${1:-}" != julius ]; then
@@ -44,11 +57,14 @@ if [ "${1:-}" != julius ]; then
     mkdir -p "$STAGE/lib" "$STAGE/include/SDL2"
     cp "$WORK/SDL2_mixer-2.6.3/build/.libs/libSDL2_mixer.a" "$STAGE/lib/"
     cp "$WORK/SDL2_mixer-2.6.3/include/SDL_mixer.h" "$STAGE/include/SDL2/"
+    echo "$DEVKIT_VERSION" > "$STAGE/.devkit"
   fi
 
   # --- Julius source + patches ----------------------------------------
   if [ ! -d "$WORK/julius" ]; then
     git -c advice.detachedHead=false clone -q --branch "$JULIUS_REF" "$JULIUS_GIT" "$WORK/julius"
+    [ "$(git -C "$WORK/julius" rev-parse HEAD)" = "$JULIUS_COMMIT" ] || {
+      echo "Julius $JULIUS_REF is not commit $JULIUS_COMMIT" >&2; exit 1; }
     ( cd "$WORK/julius" && git checkout -q -b riscos \
       && git -c user.name="Andrew Youll" -c user.email=adyoull@users.noreply.github.com \
          am -q $(sed "s|^|$ROOT/patches/julius/|" "$ROOT/patches/julius/series") )

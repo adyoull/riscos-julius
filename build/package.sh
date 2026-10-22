@@ -3,6 +3,8 @@
 # Test builds (*test) have the log turned on in !Run.
 set -euo pipefail
 . "$(dirname "$0")/env.sh"
+: "${RISCOS_TOOLCHAIN:=$CROSSDEV/toolchain/env}"
+export RISCOS_TOOLCHAIN
 . "$CROSSDEV/env.sh"
 T="$RISCOS_TOOLCHAIN"
 APP="$DIST/!Julius"
@@ -16,10 +18,9 @@ case "$VERSION" in *test) sed -i 's/^| Set Julius\$LogOn 1$/Set Julius$LogOn 1/'
 "$T/bin/arm-riscos-gnueabihf-strip" -o "$WORK/julius.stripped" "$WORK/build-julius/julius"
 "$T/bin/elf2aif" -e "$WORK/julius.stripped" "$APP/julius,ff8" >/dev/null
 
-# Icon from Julius's own logo.
-convert "$WORK/julius/res/julius_256.png" -resize 34x34 -depth 8 PNG32:"$WORK/icon34.png"
-convert "$WORK/julius/res/julius_256.png" -resize 17x17 -depth 8 PNG32:"$WORK/icon17.png"
-python3 "$CROSSDEV/package/png2sprite.py" "$APP/!Sprites,ff9" "!julius=$WORK/icon34.png" "sm!julius=$WORK/icon17.png"
+# Icon (Julius's logo at 34x34 and 17x17; made once with ImageMagick and
+# riscos-crossdev's package/png2sprite.py).
+cp "$ROOT/app/!Julius/!Sprites,ff9" "$APP/"
 
 cp "$T/riscos/PThrTicker,ffa" "$APP/"
 cp "$T/riscos/PThreadTicker-Licence,fff" "$APP/docs/"

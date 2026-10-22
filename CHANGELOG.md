@@ -19,6 +19,16 @@ Relinked with riscos-mesa 20.3.5-17 (handoff from riscos-mesa).
 - `build/env.sh` names the devkit itself (riscos-crossdev 1.8.2 still
   names 20.3.5-16); `build.sh` installs it from `dl/` or GitHub and
   checks its sha256.
+- **Built on GitHub** (riscos-crossdev's CI chain, its `docs/CI.md`):
+  `.riscos-deps` pins riscos-crossdev v1.8.2 and riscos-mesa v20.3.5-17;
+  `build/SHA256SUMS` holds the download checksums; the build scripts use
+  the container image's crossdev and toolchain when run in it and fetch
+  the pinned devkit if the image's differs; `.github/workflows/` builds,
+  packages and tests every push, and opens a pull request when a pinned
+  release has a newer one (`ci/riscos-deps-hook.sh` updates the devkit
+  checksum). `!Sprites` is kept in `app/` (no ImageMagick needed), and
+  `tests/present/run-neon.sh` uses riscos-crossdev's qemu-arm-aligntrap
+  (RISC OS alignment rules) when it's there.
 
 ## 1.8.0-riscos1 (2026-10-18) — first release
 The riscos4test program with the log turned off by default.

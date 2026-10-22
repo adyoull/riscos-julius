@@ -11,6 +11,10 @@ You need the original Caesar III files (version 1.0.1.0): see
 - `app/!Julius/`: `!Run`, `!Boot`, `!Help` and the data folder's ReadMe.
 - `build/`: `build.sh` (toolchain, devkit, SDL2_mixer, Julius) and
   `package.sh` (the zip). See [BUILDING.md](BUILDING.md).
+- `.riscos-deps`: the riscos-crossdev and riscos-mesa releases it's built
+  with. GitHub builds every push in riscos-crossdev's container image and
+  opens a pull request when either has a new release.
+- `tests/present/`: tests of the RISC OS screen code.
 
 Requirements, sound modules and playing: see `app/!Julius/!Help,fff`.
 
