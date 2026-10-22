@@ -3,3 +3,4 @@
 0003-RISC-OS-present-only-what-changed.patch
 0004-RISC-OS-faster-frame-comparison-words-NEON.patch
 0005-RISC-OS-keep-to-the-frame-limit.patch
+0006-RISC-OS-optional-smooth-scaling-by-the-display.patch

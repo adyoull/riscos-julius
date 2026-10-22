@@ -35,6 +35,18 @@ RMEnsure SharedSoundBuffer 0.07 IfThere System:Modules.SSBuffer Then RMLoad Syst
 | time back to the desktop. 0 = no limit (uses all the processor time).
 | Set Julius$FPS 30
 
+| --- Smooth scaling (try it) ------------------------------------------
+| On a Pi the display hardware can scale the game's picture up smoothly
+| (riscos-mesa's overlay). Set the display scale to 100% in Julius's
+| options, then remove the | from both Set lines below and choose the
+| size the game draws at: 1280x800 on a 1920x1200 screen looks like 150%,
+| but smooth. *Show EGL$OverlayStatus afterwards says if the overlay was
+| used; without it the picture is stretched by the sprite plot instead.
+Unset Julius$RenderSize
+Unset Julius$Overlay
+| Set Julius$RenderSize 1280x800
+| Set Julius$Overlay 1
+
 | --- Logging ----------------------------------------------------------
 | Normally nothing is logged. For a log in <Wimp$ScrapDir>.juliuslog
 | (useful when reporting a problem), remove the | from the next line.

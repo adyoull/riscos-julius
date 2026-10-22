@@ -1,5 +1,25 @@
 # Changes in the RISC OS port
 
+## 1.8.0-riscos5test (2026-10-22)
+Relinked with riscos-mesa 20.3.5-17 (handoff from riscos-mesa).
+
+- **The icon bar no longer comes up over the game in full screen** when
+  "bring the icon bar to the front automatically" is on: while the
+  pointer is over the game it stops 2 pixels above the bottom, and that
+  row counts as the bottom row, so edge scrolling still works
+  (`SDL$PointerMargin`, 0 = off).
+- **Smooth scaling by the Pi's display, to try** (`patches/julius/0006`):
+  `Julius$RenderSize` (e.g. `1280x800`) and `Julius$Overlay` (`1`) in
+  `!Run` are passed to riscos-mesa's SDL as its framebuffer hints. The
+  game then draws at that size and the display scales it, through a
+  hardware overlay, or else the sprite plot stretches it. Use them with
+  the display scale at 100%. Off by default; Julius's own variables, so
+  other SDL programs aren't affected. The log says how the picture is
+  shown.
+- `build/env.sh` names the devkit itself (riscos-crossdev 1.8.2 still
+  names 20.3.5-16); `build.sh` installs it from `dl/` or GitHub and
+  checks its sha256.
+
 ## 1.8.0-riscos1 (2026-10-18) — first release
 The riscos4test program with the log turned off by default.
 

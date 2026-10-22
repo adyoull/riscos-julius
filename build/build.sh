@@ -12,7 +12,15 @@ if [ ! -d "$CROSSDEV" ]; then
 fi
 export RISCOS_TOOLCHAIN="$CROSSDEV/toolchain/env" RISCOS_DEVKIT="$CROSSDEV/devkit/env" DL
 [ -x "$RISCOS_TOOLCHAIN/bin/arm-riscos-gnueabihf-gcc" ] || "$CROSSDEV/toolchain/install-prebuilt.sh"
-[ -f "$RISCOS_DEVKIT/VERSION" ] || "$CROSSDEV/devkit/install.sh"
+# The devkit named in env.sh (not necessarily crossdev's own).
+if [ "$(cat "$RISCOS_DEVKIT/VERSION" 2>/dev/null)" != "$DEVKIT_VERSION" ]; then
+  [ -s "$DL/$DEVKIT_TARBALL" ] || curl -fsSL -o "$DL/$DEVKIT_TARBALL" "$DEVKIT_URL"
+  echo "$DEVKIT_SHA256  $DL/$DEVKIT_TARBALL" | sha256sum -c --quiet
+  rm -rf "$RISCOS_DEVKIT" && mkdir -p "$RISCOS_DEVKIT"
+  tar xzf "$DL/$DEVKIT_TARBALL" -C "$RISCOS_DEVKIT" --strip-components=1
+  echo "installed $(cat "$RISCOS_DEVKIT/VERSION")"
+  rm -rf "$WORK/build-julius" "$STAGE/lib/libSDL2_mixer.a"   # rebuild against it
+fi
 . "$CROSSDEV/env.sh"
 CFLAGS_RO="$RISCOS_CFLAGS -mtune=cortex-a72"
 

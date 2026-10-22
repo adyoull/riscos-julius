@@ -1,0 +1,178 @@
+From 7c66694e68fbdab74306cc49b45adefb08eacbed Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 19:06:29 +0100
+Subject: [PATCH 6/6] RISC OS: optional smooth scaling by the display
+
+riscos-mesa 20.3.5-17's SDL can give a software-drawn window a surface of
+a chosen size and show it through the Pi's hardware overlay (scaled by
+the display), or else stretched by the sprite plot.
+
+Julius$RenderSize and Julius$Overlay are passed to SDL as the
+SDL_RISCOS_FB_RENDER_SIZE and SDL_RISCOS_FB_OVERLAY hints (with override
+priority) before the window is made: Julius's own variables, so other
+SDL programs started later aren't affected. After the first frame the
+log says how the picture is shown (an overlay, plotted, or SDL's
+ordinary framebuffer), asked from EGL with EGL_OVERLAY_RISCOS.
+---
+ CMakeLists.txt                       |  3 +++
+ src/platform/julius.c                |  1 +
+ src/platform/riscos/riscos.c         | 33 ++++++++++++++++++++++++++++
+ src/platform/riscos/riscos.h         | 11 ++++++++++
+ src/platform/riscos/riscos_present.c | 14 ++++++++++++
+ 5 files changed, 62 insertions(+)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index fca30f54..4368d052 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -231,6 +231,9 @@ elseif (RISCOS)
+         ${PROJECT_SOURCE_DIR}/src/platform/riscos/riscos_present.c
+         ${PROJECT_SOURCE_DIR}/src/platform/riscos/riscos_present_neon.c
+     )
++    # riscos.c asks riscos-mesa's EGL how SDL shows the picture.
++    find_path(RISCOS_EGL_INCLUDE_DIR EGL/eglext_riscos.h REQUIRED)
++    include_directories(SYSTEM ${RISCOS_EGL_INCLUDE_DIR})
+     # Only this file uses NEON; it's called only when the processor has it.
+     set_source_files_properties(${PROJECT_SOURCE_DIR}/src/platform/riscos/riscos_present_neon.c
+         PROPERTIES COMPILE_FLAGS "-mfpu=neon")
+diff --git a/src/platform/julius.c b/src/platform/julius.c
+index 096a4097..6f846e60 100644
+--- a/src/platform/julius.c
++++ b/src/platform/julius.c
+@@ -656,6 +656,7 @@ int main(int argc, char **argv)
+     julius_args args;
+ #ifdef __riscos__
+     riscos_init_output();
++    riscos_set_sdl_hints();
+ #endif
+     if (!platform_parse_arguments(argc, argv, &args)) {
+ #if !defined(_WIN32) && !defined(__vita__) && !defined(__SWITCH__) && !defined(__ANDROID__) && !defined(__APPLE__)
+diff --git a/src/platform/riscos/riscos.c b/src/platform/riscos/riscos.c
+index 1346d5d5..6503674c 100644
+--- a/src/platform/riscos/riscos.c
++++ b/src/platform/riscos/riscos.c
+@@ -4,6 +4,8 @@
+ 
+ #include "SDL.h"
+ 
++#include <EGL/egl.h>
++#include <EGL/eglext_riscos.h>
+ #include <kernel.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -42,6 +44,37 @@ void riscos_init_output(void)
+     }
+ }
+ 
++void riscos_set_sdl_hints(void)
++{
++    const char *size = getenv("Julius$RenderSize");
++    const char *overlay = getenv("Julius$Overlay");
++    if (size && *size) {
++        SDL_SetHintWithPriority("SDL_RISCOS_FB_RENDER_SIZE", size, SDL_HINT_OVERRIDE);
++        SDL_Log("RISC OS: render size %s (Julius$RenderSize)", size);
++    }
++    if (overlay && *overlay) {
++        SDL_SetHintWithPriority("SDL_RISCOS_FB_OVERLAY", overlay, SDL_HINT_OVERRIDE);
++        SDL_Log("RISC OS: overlay %s (Julius$Overlay)", overlay);
++    }
++}
++
++void riscos_log_display_path(SDL_Window *window)
++{
++    EGLSurface surface = window ? SDL_GetWindowData(window, "SDL_RISCOS_FB_EGLSurface") : 0;
++    if (!surface) {
++        SDL_Log("RISC OS: picture shown by SDL's ordinary framebuffer");
++        return;
++    }
++    EGLint value = 0;
++    if (!eglQuerySurface(eglGetDisplay(EGL_DEFAULT_DISPLAY), surface, EGL_OVERLAY_RISCOS, &value)) {
++        SDL_Log("RISC OS: picture shown through EGL (couldn't ask how)");
++        return;
++    }
++    SDL_Log("RISC OS: picture shown through EGL: %s (*Show EGL$OverlayStatus says more)",
++        value == 1 ? "an overlay, scaled by the display" :
++        value == 2 ? "an overlay, hidden" : "plotted (stretched by the sprite plot)");
++}
++
+ const char *riscos_data_directory(void)
+ {
+     const char *dir = getenv("Julius$Data");
+diff --git a/src/platform/riscos/riscos.h b/src/platform/riscos/riscos.h
+index abe843c0..e870c3e0 100644
+--- a/src/platform/riscos/riscos.h
++++ b/src/platform/riscos/riscos.h
+@@ -11,6 +11,8 @@
+  * - Each frame waits for the rest of its time with SDL_Delay, which yields
+  *   to the desktop: there is no vsync to slow the main loop down.
+  */
++#include "SDL.h"
++
+ #define PLATFORM_USE_SOFTWARE_CURSOR
+ 
+ #define PLATFORM_ENABLE_PER_FRAME_CALLBACK
+@@ -19,6 +21,15 @@ void platform_per_frame_callback(void);
+ /* Sends stdout and stderr to <Julius$Log>, or nowhere: nothing may print in the desktop. */
+ void riscos_init_output(void);
+ 
++/* Passes Julius$RenderSize and Julius$Overlay to riscos-mesa's SDL as the
++ * SDL_RISCOS_FB_RENDER_SIZE / SDL_RISCOS_FB_OVERLAY hints (Julius's own
++ * variables, so other SDL programs aren't affected). Call before the
++ * window is made. */
++void riscos_set_sdl_hints(void);
++
++/* Logs how SDL shows the window's picture (overlay, plotted, ordinary). */
++void riscos_log_display_path(SDL_Window *window);
++
+ /* The data folder from Julius$Data ("/<Julius$Data>", expanded by UnixLib), or 0. */
+ const char *riscos_data_directory(void);
+ 
+diff --git a/src/platform/riscos/riscos_present.c b/src/platform/riscos/riscos_present.c
+index 0cb80fe8..4e986bfa 100644
+--- a/src/platform/riscos/riscos_present.c
++++ b/src/platform/riscos/riscos_present.c
+@@ -2,6 +2,10 @@
+ 
+ #ifdef PLATFORM_RISCOS_PRESENT
+ 
++#ifdef __riscos__
++#include "platform/riscos/riscos.h"
++#endif
++
+ #include <stdint.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -32,6 +36,7 @@ static struct {
+     int max_rects;
+     int *open, *next;     /* rect indices reaching the band above / this band */
+     int full;
++    int log_path;         /* log how SDL shows the picture after this frame */
+     /* statistics for the log */
+     Uint32 stats_start;
+     unsigned frames, full_frames, cells, pixels;
+@@ -318,6 +323,7 @@ void riscos_present_frame(SDL_Window *window, const color_t *canvas, int canvas_
+         if (!setup(surface, canvas_w, canvas_h)) {
+             return;
+         }
++        p.log_path = 1;
+     }
+     if (!p.direct) {
+         present_generic(window, surface, canvas);
+@@ -362,6 +368,14 @@ void riscos_present_frame(SDL_Window *window, const color_t *canvas, int canvas_
+         }
+     }
+ 
++#ifdef __riscos__
++    if (p.log_path) {
++        /* After the first update: EGL's surface shows how it was shown. */
++        riscos_log_display_path(window);
++        p.log_path = 0;
++    }
++#endif
++
+     /* Statistics, logged every 10 seconds. */
+     Uint32 now = SDL_GetTicks();
+     if (!p.stats_start) {
+-- 
+2.43.0
+

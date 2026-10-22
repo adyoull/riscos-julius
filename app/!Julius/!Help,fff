@@ -49,6 +49,8 @@ Settings and saved games are kept in the data folder (C3data).
 
 In !Run you can:
 - set Julius$FPS: frames drawn per second (default 50; 0 = no limit),
+- try smooth scaling by the Pi's display (Julius$RenderSize and
+  Julius$Overlay; the display scale in Julius must be 100%),
 - turn on a log (<Wimp$ScrapDir>.juliuslog) to send with a report.
 
 Problems
